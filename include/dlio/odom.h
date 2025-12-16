@@ -15,30 +15,32 @@
 class dlio::OdomNode {
 
 public:
-
   OdomNode(ros::NodeHandle node_handle);
   ~OdomNode();
 
   void start();
 
 private:
-
   struct State;
   struct ImuMeas;
 
   void getParams();
 
-  void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc);
-  void callbackImu(const sensor_msgs::Imu::ConstPtr& imu);
+  void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr &pc);
+  void callbackImu(const sensor_msgs::Imu::ConstPtr &imu);
 
-  void publishPose(const ros::TimerEvent& e);
+  void publishPose(const ros::TimerEvent &e);
 
-  void publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
-  void publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
+  void publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud,
+                    Eigen::Matrix4f T_cloud);
+  void publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud,
+                    Eigen::Matrix4f T_cloud);
   void publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                       pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp);
+                                 pcl::PointCloud<PointType>::ConstPtr>
+                           kf,
+                       ros::Time timestamp);
 
-  void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc);
+  void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr &pc);
   void preprocessPoints();
   void deskewPointcloud();
   void initializeInputTarget();
@@ -47,17 +49,20 @@ private:
   void initializeDLIO();
 
   void getNextPose();
-  bool imuMeasFromTimeRange(double start_time, double end_time,
-                            boost::circular_buffer<ImuMeas>::reverse_iterator& begin_imu_it,
-                            boost::circular_buffer<ImuMeas>::reverse_iterator& end_imu_it);
+  bool imuMeasFromTimeRange(
+      double start_time, double end_time,
+      boost::circular_buffer<ImuMeas>::reverse_iterator &begin_imu_it,
+      boost::circular_buffer<ImuMeas>::reverse_iterator &end_imu_it);
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
-    integrateImu(double start_time, Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
-                 const std::vector<double>& sorted_timestamps);
+  integrateImu(double start_time, Eigen::Quaternionf q_init,
+               Eigen::Vector3f p_init, Eigen::Vector3f v_init,
+               const std::vector<double> &sorted_timestamps);
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
-    integrateImuInternal(Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
-                         const std::vector<double>& sorted_timestamps,
-                         boost::circular_buffer<ImuMeas>::reverse_iterator begin_imu_it,
-                         boost::circular_buffer<ImuMeas>::reverse_iterator end_imu_it);
+  integrateImuInternal(
+      Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
+      const std::vector<double> &sorted_timestamps,
+      boost::circular_buffer<ImuMeas>::reverse_iterator begin_imu_it,
+      boost::circular_buffer<ImuMeas>::reverse_iterator end_imu_it);
   void propagateGICP();
 
   void propagateState();
@@ -70,12 +75,13 @@ private:
   void computeSpaciousness();
   void computeDensity();
 
-  sensor_msgs::Imu::Ptr transformImu(const sensor_msgs::Imu::ConstPtr& imu);
+  sensor_msgs::Imu::Ptr transformImu(const sensor_msgs::Imu::ConstPtr &imu);
 
   void updateKeyframes();
   void computeConvexHull();
   void computeConcaveHull();
-  void pushSubmapIndices(std::vector<float> dists, int k, std::vector<int> frames);
+  void pushSubmapIndices(std::vector<float> dists, int k,
+                         std::vector<int> frames);
   void buildSubmap(State vehicle_state);
   void buildKeyframesAndSubmap(State vehicle_state);
   void pauseSubmapBuildIfNeeded();
@@ -125,10 +131,13 @@ private:
 
   // Keyframes
   std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                        pcl::PointCloud<PointType>::ConstPtr>> keyframes;
+                        pcl::PointCloud<PointType>::ConstPtr>>
+      keyframes;
   std::vector<ros::Time> keyframe_timestamps;
-  std::vector<std::shared_ptr<const nano_gicp::CovarianceList>> keyframe_normals;
-  std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> keyframe_transformations;
+  std::vector<std::shared_ptr<const nano_gicp::CovarianceList>>
+      keyframe_normals;
+  std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
+      keyframe_transformations;
   std::mutex keyframes_mutex;
 
   // Sensor Type
@@ -203,7 +212,8 @@ private:
     SE3 baselink2lidar;
     Eigen::Matrix4f baselink2imu_T;
     Eigen::Matrix4f baselink2lidar_T;
-  }; Extrinsics extrinsics;
+  };
+  Extrinsics extrinsics;
 
   // IMU
   ros::Time imu_stamp;
@@ -213,10 +223,12 @@ private:
 
   struct ImuMeas {
     double stamp;
-    double dt; // defined as the difference between the current and the previous measurement
+    double dt; // defined as the difference between the current and the previous
+               // measurement
     Eigen::Vector3f ang_vel;
     Eigen::Vector3f lin_accel;
-  }; ImuMeas imu_meas;
+  };
+  ImuMeas imu_meas;
 
   boost::circular_buffer<ImuMeas> imu_buffer;
   std::mutex mtx_imu;
@@ -235,7 +247,8 @@ private:
     Eigen::Vector3f prev_p;
     Eigen::Quaternionf prev_q;
     Eigen::Vector3f prev_vel;
-  }; Geo geo;
+  };
+  Geo geo;
 
   // State Vector
   struct ImuBias {
@@ -254,14 +267,15 @@ private:
   };
 
   struct State {
-    Eigen::Vector3f p; // position in world frame
+    Eigen::Vector3f p;    // position in world frame
     Eigen::Quaternionf q; // orientation in world frame
     Velocity v;
     ImuBias b; // imu biases in body frame
-  }; State state;
+  };
+  State state;
 
   struct Pose {
-    Eigen::Vector3f p; // position in world frame
+    Eigen::Vector3f p;    // position in world frame
     Eigen::Quaternionf q; // orientation in world frame
   };
   Pose lidarPose;
@@ -271,7 +285,8 @@ private:
   struct Metrics {
     std::vector<float> spaciousness;
     std::vector<float> density;
-  }; Metrics metrics;
+  };
+  Metrics metrics;
 
   std::string cpu_type;
   std::vector<double> cpu_percents;
@@ -334,5 +349,4 @@ private:
   double geo_Kgb_;
   double geo_abias_max_;
   double geo_gbias_max_;
-
 };

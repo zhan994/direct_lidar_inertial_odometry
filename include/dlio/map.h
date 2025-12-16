@@ -15,20 +15,18 @@
 class dlio::MapNode {
 
 public:
-
   MapNode(ros::NodeHandle node_handle);
   ~MapNode();
 
   void start();
 
 private:
-
   void getParams();
 
-  void callbackKeyframe(const sensor_msgs::PointCloud2ConstPtr& keyframe);
+  void callbackKeyframe(const sensor_msgs::PointCloud2ConstPtr &keyframe);
 
-  bool savePcd(direct_lidar_inertial_odometry::save_pcd::Request& req,
-               direct_lidar_inertial_odometry::save_pcd::Response& res);
+  bool savePcd(direct_lidar_inertial_odometry::save_pcd::Request &req,
+               direct_lidar_inertial_odometry::save_pcd::Response &res);
 
   ros::NodeHandle nh;
 
@@ -43,5 +41,4 @@ private:
   std::string odom_frame;
 
   double leaf_size_;
-
 };

@@ -18,45 +18,49 @@ dlio::MapNode::MapNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->getParams();
 
-  this->keyframe_sub = this->nh.subscribe("keyframes", 10,
-      &dlio::MapNode::callbackKeyframe, this, ros::TransportHints().tcpNoDelay());
+  this->keyframe_sub =
+      this->nh.subscribe("keyframes", 10, &dlio::MapNode::callbackKeyframe,
+                         this, ros::TransportHints().tcpNoDelay());
   this->map_pub = this->nh.advertise<sensor_msgs::PointCloud2>("map", 100);
-  this->save_pcd_srv = this->nh.advertiseService("save_pcd", &dlio::MapNode::savePcd, this);
+  this->save_pcd_srv =
+      this->nh.advertiseService("save_pcd", &dlio::MapNode::savePcd, this);
 
-  this->dlio_map = pcl::PointCloud<PointType>::Ptr (boost::make_shared<pcl::PointCloud<PointType>>());
+  this->dlio_map = pcl::PointCloud<PointType>::Ptr(
+      boost::make_shared<pcl::PointCloud<PointType>>());
 
   pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
-
 }
 
 dlio::MapNode::~MapNode() {}
 
 void dlio::MapNode::getParams() {
 
-  ros::param::param<std::string>("~dlio/odom/odom_frame", this->odom_frame, "odom");
+  ros::param::param<std::string>("~dlio/odom/odom_frame", this->odom_frame,
+                                 "odom");
   ros::param::param<double>("~dlio/map/sparse/leafSize", this->leaf_size_, 0.5);
 
   // Get Node NS and Remove Leading Character
   std::string ns = ros::this_node::getNamespace();
-  ns.erase(0,1);
+  ns.erase(0, 1);
 
   // Concatenate Frame Name Strings
   this->odom_frame = ns + "/" + this->odom_frame;
-
 }
 
-void dlio::MapNode::start() {
-}
+void dlio::MapNode::start() {}
 
-void dlio::MapNode::callbackKeyframe(const sensor_msgs::PointCloud2ConstPtr& keyframe) {
+void dlio::MapNode::callbackKeyframe(
+    const sensor_msgs::PointCloud2ConstPtr &keyframe) {
 
   // convert scan to pcl format
   pcl::PointCloud<PointType>::Ptr keyframe_pcl =
-    pcl::PointCloud<PointType>::Ptr (boost::make_shared<pcl::PointCloud<PointType>>());
+      pcl::PointCloud<PointType>::Ptr(
+          boost::make_shared<pcl::PointCloud<PointType>>());
   pcl::fromROSMsg(*keyframe, *keyframe_pcl);
 
   // voxel filter
-  this->voxelgrid.setLeafSize(this->leaf_size_, this->leaf_size_, this->leaf_size_);
+  this->voxelgrid.setLeafSize(this->leaf_size_, this->leaf_size_,
+                              this->leaf_size_);
   this->voxelgrid.setInputCloud(keyframe_pcl);
   this->voxelgrid.filter(*keyframe_pcl);
 
@@ -64,21 +68,22 @@ void dlio::MapNode::callbackKeyframe(const sensor_msgs::PointCloud2ConstPtr& key
   *this->dlio_map += *keyframe_pcl;
 
   // publish full map
-  if (this->dlio_map->points.size() == this->dlio_map->width * this->dlio_map->height) {
+  if (this->dlio_map->points.size() ==
+      this->dlio_map->width * this->dlio_map->height) {
     sensor_msgs::PointCloud2 map_ros;
     pcl::toROSMsg(*this->dlio_map, map_ros);
     map_ros.header.stamp = ros::Time::now();
     map_ros.header.frame_id = this->odom_frame;
     this->map_pub.publish(map_ros);
   }
-
 }
 
-bool dlio::MapNode::savePcd(direct_lidar_inertial_odometry::save_pcd::Request& req,
-                            direct_lidar_inertial_odometry::save_pcd::Response& res) {
+bool dlio::MapNode::savePcd(
+    direct_lidar_inertial_odometry::save_pcd::Request &req,
+    direct_lidar_inertial_odometry::save_pcd::Response &res) {
 
-  pcl::PointCloud<PointType>::Ptr m =
-    pcl::PointCloud<PointType>::Ptr (boost::make_shared<pcl::PointCloud<PointType>>(*this->dlio_map));
+  pcl::PointCloud<PointType>::Ptr m = pcl::PointCloud<PointType>::Ptr(
+      boost::make_shared<pcl::PointCloud<PointType>>(*this->dlio_map));
 
   float leaf_size = req.leaf_size;
   std::string p = req.save_path;
@@ -88,9 +93,11 @@ bool dlio::MapNode::savePcd(direct_lidar_inertial_odometry::save_pcd::Request& r
     res.success = false;
     return false;
   }
-  
+
   std::cout << std::setprecision(2) << "Saving map to " << p + "/dlio_map.pcd"
-    << " with leaf size " << to_string_with_precision(leaf_size, 2) << "... "; std::cout.flush();
+            << " with leaf size " << to_string_with_precision(leaf_size, 2)
+            << "... ";
+  std::cout.flush();
 
   // voxelize map
   pcl::VoxelGrid<PointType> vg;
@@ -109,5 +116,4 @@ bool dlio::MapNode::savePcd(direct_lidar_inertial_odometry::save_pcd::Request& r
   }
 
   return res.success;
-
 }

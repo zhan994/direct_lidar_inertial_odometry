@@ -12,7 +12,7 @@
 
 #include "dlio/map.h"
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 
   mallopt(M_ARENA_MAX, 1);
 
@@ -26,5 +26,4 @@ int main(int argc, char** argv) {
   ros::waitForShutdown();
 
   return 0;
-
 }

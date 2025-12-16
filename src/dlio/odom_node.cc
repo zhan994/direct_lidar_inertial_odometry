@@ -12,10 +12,10 @@
 
 #include "dlio/odom.h"
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 
   mallopt(M_ARENA_MAX, 1);
-  
+
   ros::init(argc, argv, "dlio_odom_node");
   ros::NodeHandle nh("~");
 
@@ -26,5 +26,4 @@ int main(int argc, char** argv) {
   ros::waitForShutdown();
 
   return 0;
-
 }

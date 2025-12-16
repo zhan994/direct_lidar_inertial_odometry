@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <ios>
 #include <iostream>
+#include <malloc.h>
 #include <mutex>
 #include <queue>
 #include <signal.h>
@@ -33,39 +34,37 @@
 #include <sys/times.h>
 #include <sys/vtimes.h>
 #include <thread>
-#include <malloc.h>
 
 template <typename T>
-std::string to_string_with_precision(const T a_value, const int n = 6)
-{
-    std::ostringstream out;
-    out.precision(n);
-    out << std::fixed << a_value;
-    return out.str();
+std::string to_string_with_precision(const T a_value, const int n = 6) {
+  std::ostringstream out;
+  out.precision(n);
+  out << std::fixed << a_value;
+  return out.str();
 }
 
 // ROS
-#include <ros/ros.h>
-#include <nav_msgs/Odometry.h>
-#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
+#include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 // BOOST
-#include <boost/format.hpp>
-#include <boost/circular_buffer.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/range/adaptor/indexed.hpp>
+#include <boost/circular_buffer.hpp>
+#include <boost/format.hpp>
 #include <boost/range/adaptor/adjacent_filtered.hpp>
+#include <boost/range/adaptor/indexed.hpp>
 
 // PCL
 #define PCL_NO_PRECOMPILE
 #include <pcl/filters/crop_box.h>
-#include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/surface/concave_hull.h>
 #include <pcl/surface/convex_hull.h>
@@ -75,30 +74,32 @@ std::string to_string_with_precision(const T a_value, const int n = 6)
 #include <pcl_ros/transforms.h>
 
 // DLIO
-#include <nano_gicp/nano_gicp.h>
 #include <direct_lidar_inertial_odometry/save_pcd.h>
+#include <nano_gicp/nano_gicp.h>
 
 namespace dlio {
-  enum class SensorType { OUSTER, VELODYNE, HESAI, LIVOX, UNKNOWN };
+enum class SensorType { OUSTER, VELODYNE, HESAI, LIVOX, ROBOSENSE, UNKNOWN };
 
-  class OdomNode;
-  class MapNode;
+class OdomNode;
+class MapNode;
 
-  struct Point {
-    Point(): data{0.f, 0.f, 0.f, 1.f} {}
+struct Point {
+  Point() : data{0.f, 0.f, 0.f, 1.f} {}
 
-    PCL_ADD_POINT4D;
-    float intensity; // intensity
-    union {
-    std::uint32_t t;   // (Ouster) time since beginning of scan in nanoseconds
-    float time;        // (Velodyne) time since beginning of scan in seconds
-    double timestamp;  // (Hesai) absolute timestamp in seconds
-                       // (Livox) absolute timestamp in (seconds * 10e9)
-    };
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  } EIGEN_ALIGN16;
-}
+  PCL_ADD_POINT4D;
+  float intensity; // intensity
+  union {
+    std::uint32_t t;  // (Ouster) time since beginning of scan in nanoseconds
+    float time;       // (Velodyne) time since beginning of scan in seconds
+    double timestamp; // (Hesai) absolute timestamp in seconds
+                      // (Livox) absolute timestamp in (seconds * 10e9)
+                      // (Robosense) absolute timestamp in seconds
+  };
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+} // namespace dlio
 
+// clang-format off
 POINT_CLOUD_REGISTER_POINT_STRUCT(dlio::Point,
                                  (float, x, x)
                                  (float, y, y)
