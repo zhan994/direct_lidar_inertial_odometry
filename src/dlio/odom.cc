@@ -173,6 +173,12 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
       this->numProcessors++;
   }
   fclose(file);
+
+  // flu_odom and airbody_imu matrices
+  this->R_flu_odom_ << 0, 1, 0, -1, 0, 0, 0, 0, 1;
+  this->R_airbody_imu_ << 0, 0, -1, 1, 0, 0, 0, -1, 0;
+  this->t_flu_odom_ = Eigen::Vector3f(0., 0., 0.);
+  this->t_airbody_imu_ = Eigen::Vector3f(0., 0., 0.);
 }
 
 dlio::OdomNode::~OdomNode() {}
@@ -360,6 +366,21 @@ void dlio::OdomNode::getParams() {
                             1.0);
 
   ros::param::param<bool>("~dlio/verbose", this->verbose, true);
+
+  // open evo traj. file
+  ros::param::param<std::string>("~dlio/evo_traj_file", this->fout_evo_fn_,
+                                 "DLIO.txt");
+  this->fout_evo_.open(this->fout_evo_fn_, std::ios::out);
+  if (this->fout_evo_.is_open()) {
+    if (this->verbose) {
+      std::cout << "Opened evo trajectory file: " << this->fout_evo_fn_
+                << std::endl;
+      this->fout_evo_ << "# timestamp x y z qx qy qz qw" << std::endl;
+    }
+  } else {
+    std::cerr << "Failed to open evo trajectory file: " << this->fout_evo_fn_
+              << std::endl;
+  }
 }
 
 void dlio::OdomNode::start() {
@@ -499,6 +520,25 @@ void dlio::OdomNode::publishToROS(
   transformStamped.transform.rotation.z = qq.z();
 
   br.sendTransform(transformStamped);
+
+  // record trajectory in evo format
+  if (this->fout_evo_.is_open()) {
+    // odom -> imu
+    Eigen::Matrix3f R_oi = this->state.q.toRotationMatrix();
+    Eigen::Vector3f t_oi = this->state.p;
+    // flu -> imu
+    Eigen::Matrix3f R_wi = this->R_flu_odom_ * R_oi;
+    Eigen::Vector3f t_wi = this->R_flu_odom_ * t_oi + this->t_flu_odom_;
+    // flu -> body
+    Eigen::Matrix3f R_wb = R_wi * this->R_airbody_imu_.transpose();
+    Eigen::Vector3f t_wb = t_wi - R_wb * this->t_airbody_imu_;
+    Eigen::Quaternionf q_wb(R_wb);
+    this->fout_evo_ << std::fixed << std::setprecision(6)
+                    << this->imu_stamp.toSec() << " " << t_wb.x() << " "
+                    << t_wb.y() << " " << t_wb.z() << " " << q_wb.x() << " "
+                    << q_wb.y() << " " << q_wb.z() << " " << q_wb.w()
+                    << std::endl;
+  }
 }
 
 void dlio::OdomNode::publishCloud(
@@ -566,7 +606,6 @@ void dlio::OdomNode::publishKeyframe(
 
 void dlio::OdomNode::getScanFromROS(
     const sensor_msgs::PointCloud2ConstPtr &pc) {
-
   pcl::PointCloud<PointType>::Ptr original_scan_(
       boost::make_shared<pcl::PointCloud<PointType>>());
   pcl::fromROSMsg(*pc, *original_scan_);
@@ -590,16 +629,16 @@ void dlio::OdomNode::getScanFromROS(
       this->sensor = dlio::SensorType::VELODYNE;
       break;
     } else if (field.name == "timestamp" &&
+               pc->header.frame_id.find("rslidar") != std::string::npos) {
+      this->sensor = dlio::SensorType::ROBOSENSE;
+      break;
+    } else if (field.name == "timestamp" &&
                original_scan_->points[0].timestamp < 1e14) {
       this->sensor = dlio::SensorType::HESAI;
       break;
     } else if (field.name == "timestamp" &&
                original_scan_->points[0].timestamp > 1e14) {
       this->sensor = dlio::SensorType::LIVOX;
-      break;
-    } else if (field.name == "timestamp" &&
-               pc->header.frame_id.find("rslidar") != std::string::npos) {
-      this->sensor = dlio::SensorType::ROBOSENSE;
       break;
     }
   }
@@ -774,21 +813,22 @@ void dlio::OdomNode::deskewPointcloud() {
   std::vector<double> timestamps;
   std::vector<int> unique_time_indices;
 
-  // compute offset between sweep reference time and first point timestamp
+  // note: compute offset between sweep reference time and first point timestamp
   double offset = 0.0;
   if (this->time_offset_) {
     offset =
         sweep_ref_time - extract_point_time(*points_unique_timestamps.begin());
   }
-
+  // std::cout << "Time offset applied: " << offset << " s" << std::endl;
+  
   // build list of unique timestamps and indices of first point with each
   // timestamp
   for (auto it = points_unique_timestamps.begin();
        it != points_unique_timestamps.end(); it++) {
-    timestamps.push_back(extract_point_time(*it) + offset);
-    unique_time_indices.push_back(it->index());
+    timestamps.push_back(extract_point_time(*it) + offset); // apply offset
+    unique_time_indices.push_back(it->index()); // save pt index in scan
   }
-  unique_time_indices.push_back(deskewed_scan_->points.size());
+  unique_time_indices.push_back(deskewed_scan_->points.size()); // add end index
 
   int median_pt_index = timestamps.size() / 2;
   this->scan_stamp =
@@ -842,7 +882,7 @@ void dlio::OdomNode::deskewPointcloud() {
 
     Eigen::Matrix4f T = frames[i] * this->extrinsics.baselink2lidar_T;
 
-    // transform point to world frame
+    // transform point to world frame, use same T for points with same timestamp
     for (int k = unique_time_indices[i]; k < unique_time_indices[i + 1]; k++) {
       auto &pt = deskewed_scan_->points[k];
       pt.getVector4fMap()[3] = 1.;
@@ -2197,6 +2237,13 @@ void dlio::OdomNode::debug() {
   } else if (this->sensor == dlio::SensorType::LIVOX) {
     std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
               << "Sensor Rates: Livox @ " +
+                     to_string_with_precision(avg_lidar_rate, 2) +
+                     " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) +
+                     " Hz"
+              << "|" << std::endl;
+  } else if (this->sensor == dlio::SensorType::ROBOSENSE) {
+    std::cout << "| " << std::left << std::setfill(' ') << std::setw(66)
+              << "Sensor Rates: Robosense @ " +
                      to_string_with_precision(avg_lidar_rate, 2) +
                      " Hz, IMU @ " + to_string_with_precision(avg_imu_rate, 2) +
                      " Hz"

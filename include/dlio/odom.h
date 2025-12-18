@@ -349,4 +349,10 @@ private:
   double geo_Kgb_;
   double geo_abias_max_;
   double geo_gbias_max_;
+
+  // evo traj. file
+  Eigen::Matrix3f R_flu_odom_, R_airbody_imu_;
+  Eigen::Vector3f t_flu_odom_, t_airbody_imu_;
+  std::string fout_evo_fn_;
+  std::ofstream fout_evo_;
 };

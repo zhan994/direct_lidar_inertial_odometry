@@ -11,7 +11,8 @@
 ###########################################################
 
 dlio:
-
+  verbose: true
+  evo_traj_file: /home/zhan/DLIO.txt
   frames:
     odom: odom
     baselink: base_link
@@ -35,7 +36,7 @@ dlio:
       calibration:
         gyro: true
         accel: true
-        time: 3
+        time: 0.5
       bufferSize: 5000
 
     preprocessing:
