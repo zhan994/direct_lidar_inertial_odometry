@@ -11,7 +11,7 @@
 ###########################################################
 
 dlio:
-  verbose: true
+  verbose: false
   evo_traj_file: /home/zhan/DLIO.txt
   frames:
     odom: odom

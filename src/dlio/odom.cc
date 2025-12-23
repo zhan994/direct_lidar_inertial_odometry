@@ -14,27 +14,32 @@
 
 dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
-  this->getParams();
+  this->getParams(); // 获取参数
 
-  this->num_threads_ = omp_get_max_threads();
+  this->num_threads_ = omp_get_max_threads(); // 获取最大线程数
 
-  this->dlio_initialized = false;
-  this->first_valid_scan = false;
-  this->first_imu_received = false;
+  this->dlio_initialized = false;   // 初始化标志
+  this->first_valid_scan = false;   // 第一个有效扫描标志
+  this->first_imu_received = false; // 第一个IMU接收标志
+
+  // IMU校准标志，true直接读取先验偏置
   if (this->imu_calibrate_) {
     this->imu_calibrated = false;
   } else {
     this->imu_calibrated = true;
   }
-  this->deskew_status = false;
-  this->deskew_size = 0;
 
+  this->deskew_status = false; // 去畸变状态标志
+  this->deskew_size = 0;       // 去畸变点云大小
+
+  // 订阅者
   this->lidar_sub =
       this->nh.subscribe("pointcloud", 1, &dlio::OdomNode::callbackPointCloud,
                          this, ros::TransportHints().tcpNoDelay());
   this->imu_sub = this->nh.subscribe("imu", 1000, &dlio::OdomNode::callbackImu,
                                      this, ros::TransportHints().tcpNoDelay());
 
+  // 发布者
   this->odom_pub = this->nh.advertise<nav_msgs::Odometry>("odom", 1, true);
   this->pose_pub =
       this->nh.advertise<geometry_msgs::PoseStamped>("pose", 1, true);
@@ -46,6 +51,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->deskewed_pub =
       this->nh.advertise<sensor_msgs::PointCloud2>("deskewed", 1, true);
 
+  // 定时器，用于发布位姿
   this->publish_timer = this->nh.createTimer(
       ros::Duration(0.01), &dlio::OdomNode::publishPose, this);
 
@@ -53,17 +59,18 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->T_prior = Eigen::Matrix4f::Identity();
   this->T_corr = Eigen::Matrix4f::Identity();
 
-  this->origin = Eigen::Vector3f(0., 0., 0.);
-  this->state.p = Eigen::Vector3f(0., 0., 0.);
-  this->state.q = Eigen::Quaternionf(1., 0., 0., 0.);
-  this->state.v.lin.b = Eigen::Vector3f(0., 0., 0.);
+  this->origin = Eigen::Vector3f(0., 0., 0.);         // 原点
+  this->state.p = Eigen::Vector3f(0., 0., 0.);        // 位置
+  this->state.q = Eigen::Quaternionf(1., 0., 0., 0.); // 姿态四元数
+  this->state.v.lin.b = Eigen::Vector3f(0., 0., 0.);  // 线速度
   this->state.v.lin.w = Eigen::Vector3f(0., 0., 0.);
-  this->state.v.ang.b = Eigen::Vector3f(0., 0., 0.);
+  this->state.v.ang.b = Eigen::Vector3f(0., 0., 0.); // 角速度
   this->state.v.ang.w = Eigen::Vector3f(0., 0., 0.);
 
-  this->lidarPose.p = Eigen::Vector3f(0., 0., 0.);
-  this->lidarPose.q = Eigen::Quaternionf(1., 0., 0., 0.);
+  this->lidarPose.p = Eigen::Vector3f(0., 0., 0.);        // LiDAR位姿位置
+  this->lidarPose.q = Eigen::Quaternionf(1., 0., 0., 0.); // LiDAR位姿四元数
 
+  // 初始化IMU测量值
   this->imu_meas.stamp = 0.;
   this->imu_meas.ang_vel[0] = 0.;
   this->imu_meas.ang_vel[1] = 0.;
@@ -72,10 +79,12 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->imu_meas.lin_accel[1] = 0.;
   this->imu_meas.lin_accel[2] = 0.;
 
+  // 初始化IMU缓冲区
   this->imu_buffer.set_capacity(this->imu_buffer_size_);
   this->first_imu_stamp = 0.;
   this->prev_imu_stamp = 0.;
 
+  // 初始化点云指针
   this->original_scan = pcl::PointCloud<PointType>::ConstPtr(
       boost::make_shared<const pcl::PointCloud<PointType>>());
   this->deskewed_scan = pcl::PointCloud<PointType>::ConstPtr(
@@ -85,12 +94,12 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->submap_cloud = pcl::PointCloud<PointType>::ConstPtr(
       boost::make_shared<const pcl::PointCloud<PointType>>());
 
-  this->num_processed_keyframes = 0;
+  this->num_processed_keyframes = 0; // 处理的关键帧数量
 
-  this->submap_hasChanged = true;
-  this->submap_kf_idx_prev.clear();
+  this->submap_hasChanged = true;   // 子图变化标志
+  this->submap_kf_idx_prev.clear(); // 上一个子图关键帧索引
 
-  this->first_scan_stamp = 0.;
+  this->first_scan_stamp = 0.; // 第一个扫描时间戳
   this->elapsed_time = 0.;
   this->length_traversed;
 
@@ -99,6 +108,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->concave_hull.setAlpha(this->keyframe_thresh_dist_);
   this->concave_hull.setKeepInformation(true);
 
+  // 初始化GICP参数
   this->gicp.setCorrespondenceRandomness(this->gicp_k_correspondences_);
   this->gicp.setMaxCorrespondenceDistance(this->gicp_max_corr_dist_);
   this->gicp.setMaximumIterations(this->gicp_max_iter_);
@@ -119,11 +129,13 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   this->gicp_temp.setSearchMethodSource(temp, true);
   this->gicp_temp.setSearchMethodTarget(temp, true);
 
+  // 几何观测器初始化
   this->geo.first_opt_done = false;
   this->geo.prev_vel = Eigen::Vector3f(0., 0., 0.);
 
   pcl::console::setVerbosityLevel(pcl::console::L_ERROR);
 
+  // cropbox和体素滤波器初始化
   this->crop.setNegative(true);
   this->crop.setMin(Eigen::Vector4f(-this->crop_size_, -this->crop_size_,
                                     -this->crop_size_, 1.0));
@@ -132,6 +144,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->voxel.setLeafSize(this->vf_res_, this->vf_res_, this->vf_res_);
 
+  // 初始化性能指标
   this->metrics.spaciousness.push_back(0.);
   this->metrics.density.push_back(this->gicp_max_corr_dist_);
 
@@ -143,11 +156,12 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
 #ifdef HAS_CPUID
   unsigned int CPUInfo[4] = {0, 0, 0, 0};
-  __cpuid(0x80000000, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
+  __cpuid(0x80000000, CPUInfo[0], CPUInfo[1], CPUInfo[2],
+          CPUInfo[3]); // 获取CPU信息
   unsigned int nExIds = CPUInfo[0];
   for (unsigned int i = 0x80000000; i <= nExIds; ++i) {
     __cpuid(i, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
-    if (i == 0x80000002)
+    if (i == 0x80000002) // 获取CPU品牌字符串
       memcpy(CPUBrandString, CPUInfo, sizeof(CPUInfo));
     else if (i == 0x80000003)
       memcpy(CPUBrandString + 16, CPUInfo, sizeof(CPUInfo));
@@ -162,9 +176,9 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   struct tms timeSample;
   char line[128];
 
-  this->lastCPU = times(&timeSample);
-  this->lastSysCPU = timeSample.tms_stime;
-  this->lastUserCPU = timeSample.tms_utime;
+  this->lastCPU = times(&timeSample);       // 获取CPU时间
+  this->lastSysCPU = timeSample.tms_stime;  // 系统CPU时间
+  this->lastUserCPU = timeSample.tms_utime; // 用户CPU时间
 
   file = fopen("/proc/cpuinfo", "r");
   this->numProcessors = 0;
@@ -174,7 +188,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
   }
   fclose(file);
 
-  // flu_odom and airbody_imu matrices
+  // note: record evo traj using flu_odom and airbody_imu matrices
   this->R_flu_odom_ << 0, 1, 0, -1, 0, 0, 0, 0, 1;
   this->R_airbody_imu_ << 0, 0, -1, 1, 0, 0, 0, -1, 0;
   this->t_flu_odom_ = Eigen::Vector3f(0., 0., 0.);
@@ -604,6 +618,7 @@ void dlio::OdomNode::publishKeyframe(
   }
 }
 
+// ROS数据转换为DLIO点云格式
 void dlio::OdomNode::getScanFromROS(
     const sensor_msgs::PointCloud2ConstPtr &pc) {
   pcl::PointCloud<PointType>::Ptr original_scan_(
@@ -611,15 +626,18 @@ void dlio::OdomNode::getScanFromROS(
   pcl::fromROSMsg(*pc, *original_scan_);
 
   // Remove NaNs
+  // step: 1 无效点剔除
   std::vector<int> idx;
   original_scan_->is_dense = false;
   pcl::removeNaNFromPointCloud(*original_scan_, *original_scan_, idx);
 
   // Crop Box Filter
+  // step: 2 Crop Box滤波，去除离传感器过近的点
   this->crop.setInputCloud(original_scan_);
   this->crop.filter(*original_scan_);
 
   // automatically detect sensor type
+  // step: 3 根据点云字段自动检测传感器类型
   this->sensor = dlio::SensorType::UNKNOWN;
   for (auto &field : pc->fields) {
     if (field.name == "t") {
@@ -651,11 +669,14 @@ void dlio::OdomNode::getScanFromROS(
   this->original_scan = original_scan_;
 }
 
+// 点云预处理：去畸变+体素滤波
 void dlio::OdomNode::preprocessPoints() {
 
   // Deskew the original dlio-type scan
+  // step: 1 去畸变
   if (this->deskew_) {
 
+    // step: 1.0 去畸变
     this->deskewPointcloud();
 
     if (!this->first_valid_scan) {
@@ -667,6 +688,7 @@ void dlio::OdomNode::preprocessPoints() {
     this->scan_stamp = this->scan_header_stamp.toSec();
 
     // don't process scans until IMU data is present
+    // step: 1.1 首次有效点云前不进行处理
     if (!this->first_valid_scan) {
 
       if (this->imu_buffer.empty() ||
@@ -680,6 +702,7 @@ void dlio::OdomNode::preprocessPoints() {
     } else {
 
       // IMU prior for second scan onwards
+      // step: 1.2 利用IMU数据进行预积分，计算先验位姿
       std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
           frames;
       frames = this->integrateImu(
@@ -693,6 +716,7 @@ void dlio::OdomNode::preprocessPoints() {
       }
     }
 
+    // step: 1.3 根据IMU积分结果对点云坐标变换
     pcl::PointCloud<PointType>::Ptr deskewed_scan_(
         boost::make_shared<pcl::PointCloud<PointType>>());
     pcl::transformPointCloud(*this->original_scan, *deskewed_scan_,
@@ -702,6 +726,7 @@ void dlio::OdomNode::preprocessPoints() {
   }
 
   // Voxel Grid Filter
+  // step: 2 体素滤波
   if (this->vf_use_) {
     pcl::PointCloud<PointType>::Ptr current_scan_(
         boost::make_shared<pcl::PointCloud<PointType>>(*this->deskewed_scan));
@@ -820,7 +845,7 @@ void dlio::OdomNode::deskewPointcloud() {
         sweep_ref_time - extract_point_time(*points_unique_timestamps.begin());
   }
   // std::cout << "Time offset applied: " << offset << " s" << std::endl;
-  
+
   // build list of unique timestamps and indices of first point with each
   // timestamp
   for (auto it = points_unique_timestamps.begin();
@@ -837,10 +862,22 @@ void dlio::OdomNode::deskewPointcloud() {
 
   // don't process scans until IMU data is present
   if (!this->first_valid_scan) {
+    // note: 确保有IMU数据，并且IMU数据的时间戳早于当前点云扫描的时间戳
     if (this->imu_buffer.empty() ||
         this->scan_stamp <= this->imu_buffer.back().stamp) {
+      std::cout << std::fixed << std::setprecision(6)
+                << " ----- Waiting for first valid scan... " << this->scan_stamp
+                << ", imu buffer size: " << imu_buffer.size()
+                << ", oldest imu ts: " << this->imu_buffer.back().stamp
+                << std::endl;
       return;
     }
+
+    std::cout << std::fixed << std::setprecision(6)
+              << " ***** First valid scan... " << this->scan_stamp
+              << ", imu buffer size: " << imu_buffer.size()
+              << ", oldest imu ts: " << this->imu_buffer.back().stamp
+              << std::endl;
 
     this->first_valid_scan = true;
     this->T_prior = this->T; // assume no motion for the first scan
@@ -912,9 +949,10 @@ void dlio::OdomNode::setInputSource() {
   this->gicp.calculateSourceCovariances();
 }
 
+// 等待IMU数据和校准完成后，初始化DLIO
 void dlio::OdomNode::initializeDLIO() {
-
   // Wait for IMU
+  // 如果没有接收到IMU数据或者IMU没有校准，直接返回
   if (!this->first_imu_received || !this->imu_calibrated) {
     return;
   }
@@ -923,6 +961,7 @@ void dlio::OdomNode::initializeDLIO() {
   std::cout << std::endl << " DLIO initialized!" << std::endl;
 }
 
+// 点云回调函数
 void dlio::OdomNode::callbackPointCloud(
     const sensor_msgs::PointCloud2ConstPtr &pc) {
 
@@ -938,38 +977,47 @@ void dlio::OdomNode::callbackPointCloud(
   }
 
   // DLIO Initialization procedures (IMU calib, gravity align)
+  // step: 1 IMU calib + 重力对齐 = DLIO初始化
   if (!this->dlio_initialized) {
+    std::cout << " =====> Waiting for DLIO init..." << std::endl;
     this->initializeDLIO();
   }
 
   // Convert incoming scan into DLIO format
+  // step: 2 获取点云数据
   this->getScanFromROS(pc);
 
   // Preprocess points
+  // step: 3 点云预处理（去畸变+体素滤波）
   this->preprocessPoints();
 
   if (!this->first_valid_scan) {
     return;
   }
 
+  // step: 4 点云数量检查
   if (this->current_scan->points.size() <= this->gicp_min_num_points_) {
     ROS_FATAL("Low number of points in the cloud!");
     return;
   }
 
   // Compute Metrics
+  // step: 5 计算度量指标，并在单独的线程中进行
   this->metrics_thread = std::thread(&dlio::OdomNode::computeMetrics, this);
   this->metrics_thread.detach();
 
   // Set Adaptive Parameters
+  // step: 6 设置自适应参数
   if (this->adaptive_params_) {
     this->setAdaptiveParams();
   }
 
   // Set new frame as input source
+  // step: 7 设置当前点云为GICP的源点云
   this->setInputSource();
 
   // Set initial frame as first keyframe
+  // step: 8 如果是第一帧点云，则初始化关键帧
   if (this->keyframes.size() == 0) {
     this->initializeInputTarget();
     this->main_loop_running = false;
@@ -981,13 +1029,16 @@ void dlio::OdomNode::callbackPointCloud(
   }
 
   // Get the next pose via IMU + S2M + GEO
+  // step: 9 通过IMU+S2M+GEO获取下一个位姿
   this->getNextPose();
 
   // Update current keyframe poses and map
+  // step: 10 更新关键帧
   this->updateKeyframes();
 
   // Build keyframe normals and submap if needed (and if we're not already
   // waiting)
+  // step: 11 构建关键帧法线和子图（如果需要且我们还没有等待的话）
   if (this->new_submap_is_ready) {
     this->main_loop_running = false;
     this->submap_future =
@@ -1001,14 +1052,17 @@ void dlio::OdomNode::callbackPointCloud(
   }
 
   // Update trajectory
+  // step: 12 更新轨迹
   this->trajectory.push_back(std::make_pair(this->state.p, this->state.q));
 
   // Update time stamps
+  // step: 13 更新时间戳
   this->lidar_rates.push_back(1. / (this->scan_stamp - this->prev_scan_stamp));
   this->prev_scan_stamp = this->scan_stamp;
   this->elapsed_time = this->scan_stamp - this->first_scan_stamp;
 
   // Publish stuff to ROS
+  // step: 14 发布数据到ROS
   pcl::PointCloud<PointType>::ConstPtr published_cloud;
   if (this->densemap_filtered_) {
     published_cloud = this->current_scan;
@@ -1020,22 +1074,26 @@ void dlio::OdomNode::callbackPointCloud(
   this->publish_thread.detach();
 
   // Update some statistics
+  // step: 15 更新一些统计数据
   this->comp_times.push_back(ros::Time::now().toSec() - then);
   this->gicp_hasConverged = this->gicp.hasConverged();
 
   // Debug statements and publish custom DLIO message
+  // step: 16 调试语句并发布自定义DLIO消息
   if (this->verbose) {
     this->debug_thread = std::thread(&dlio::OdomNode::debug, this);
     this->debug_thread.detach();
   }
 
-  this->geo.first_opt_done = true;
+  this->geo.first_opt_done = true; // 第一次优化完成
 }
 
+// IMU回调函数
 void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
   this->first_imu_received = true;
 
+  // step: 1 转换为Body系的IMU数据
   sensor_msgs::Imu::Ptr imu = this->transformImu(imu_raw);
   this->imu_stamp = imu->header.stamp;
 
@@ -1043,6 +1101,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
   Eigen::Vector3f ang_vel;
 
   // Get IMU samples
+  // step: 2 提取IMU数据
   ang_vel[0] = imu->angular_velocity.x;
   ang_vel[1] = imu->angular_velocity.y;
   ang_vel[2] = imu->angular_velocity.z;
@@ -1056,6 +1115,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
   }
 
   // IMU calibration procedure - do for three seconds
+  // step: 3 IMU标定过程 - 持续时间见参数imu_calib_time_
   if (!this->imu_calibrated) {
 
     static int num_samples = 0;
@@ -1063,6 +1123,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
     static Eigen::Vector3f accel_avg(0., 0., 0.);
     static bool print = true;
 
+    // step: 3.1 在imu_calib_time_时间内，计算陀螺仪和加速度计的平均值
     if ((imu->header.stamp.toSec() - this->first_imu_stamp) <
         this->imu_calib_time_) {
 
@@ -1087,12 +1148,21 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
     } else {
 
       std::cout << "done" << std::endl << std::endl;
+      std::cout << " imu calibration state: " << std::endl;
+      std::cout << "  p: " << this->state.p.transpose() << std::endl;
+      std::cout << "  q: " << this->state.q.coeffs().transpose() << std::endl;
+      std::cout << "  v_lin: " << this->state.v.lin.w.transpose() << std::endl;
+      std::cout << "  v_ang: " << this->state.v.ang.b.transpose() << std::endl;
+      std::cout << "  b_accel: " << this->state.b.accel.transpose()
+                << std::endl;
+      std::cout << "  b_gyro: " << this->state.b.gyro.transpose() << std::endl;
+      std::cout << std::endl;
 
       gyro_avg /= num_samples;
       accel_avg /= num_samples;
 
+      // step: 3.2 重力对齐
       Eigen::Vector3f grav_vec(0., 0., this->gravity_);
-
       if (this->gravity_align_) {
 
         // Estimate gravity vector - Only approximate if biases have not been
@@ -1129,6 +1199,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
         std::cout << std::endl;
       }
 
+      // step: 3.3 计算IMU偏置
       if (this->calibrate_accel_) {
 
         // subtract gravity from avg accel to get bias
@@ -1156,7 +1227,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
     }
 
   } else {
-
+    // step: 4 正常运行，处理IMU数据
     double dt = imu->header.stamp.toSec() - this->prev_imu_stamp;
     if (dt == 0) {
       dt = 1.0 / 200.0;
@@ -1168,6 +1239,7 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
     this->imu_meas.dt = dt;
     this->prev_imu_stamp = this->imu_meas.stamp;
 
+    // step: 4.1 correct measurements with bias and smoothing
     Eigen::Vector3f lin_accel_corrected =
         (this->imu_accel_sm_ * lin_accel) - this->state.b.accel;
     Eigen::Vector3f ang_vel_corrected = ang_vel - this->state.b.gyro;
@@ -1177,13 +1249,16 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
     // Store calibrated IMU measurements into imu buffer for manual integration
     // later.
+    // step: 4.2 将校准后的IMU测量值存储到IMU缓冲区以供后续手动积分
     this->mtx_imu.lock();
     this->imu_buffer.push_front(this->imu_meas);
     this->mtx_imu.unlock();
 
     // Notify the callbackPointCloud thread that IMU data exists for this time
+    // step: 4.3 通知callbackPointCloud线程，当前时间存在IMU数据
     this->cv_imu_stamp.notify_one();
 
+    // step: 4.4 如果几何观测器已经初始化，则传播状态
     if (this->geo.first_opt_done) {
       // Geometric Observer: Propagate State
       this->propagateState();
@@ -1608,6 +1683,7 @@ void dlio::OdomNode::updateState() {
   this->geo.prev_vel = this->state.v.lin.w;
 }
 
+// 转换到body系
 sensor_msgs::Imu::Ptr
 dlio::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
@@ -1646,6 +1722,7 @@ dlio::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
   Eigen::Vector3f lin_accel_cg = this->extrinsics.baselink2imu.R * lin_accel;
 
+  // add in component due to rotation about the IMU frame
   lin_accel_cg =
       lin_accel_cg +
       ((ang_vel_cg - ang_vel_cg_prev) / dt)
