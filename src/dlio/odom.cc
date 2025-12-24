@@ -12,6 +12,7 @@
 
 #include "dlio/odom.h"
 
+// api: 构造函数，初始化DLIO里程计节点
 dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
   this->getParams(); // 获取参数
@@ -618,7 +619,7 @@ void dlio::OdomNode::publishKeyframe(
   }
 }
 
-// ROS数据转换为DLIO点云格式
+// api: ROS数据转换为DLIO点云格式
 void dlio::OdomNode::getScanFromROS(
     const sensor_msgs::PointCloud2ConstPtr &pc) {
   pcl::PointCloud<PointType>::Ptr original_scan_(
@@ -669,7 +670,7 @@ void dlio::OdomNode::getScanFromROS(
   this->original_scan = original_scan_;
 }
 
-// 点云预处理：去畸变+体素滤波
+// api: 点云预处理：去畸变+体素滤波
 void dlio::OdomNode::preprocessPoints() {
 
   // Deskew the original dlio-type scan
@@ -738,16 +739,19 @@ void dlio::OdomNode::preprocessPoints() {
   }
 }
 
+// api: 点云去畸变，将点云数据相对于一个参考时间戳进行校正
 void dlio::OdomNode::deskewPointcloud() {
-
+  // step: 1 去畸变点云初始化
   pcl::PointCloud<PointType>::Ptr deskewed_scan_(
       boost::make_shared<pcl::PointCloud<PointType>>());
   deskewed_scan_->points.resize(this->original_scan->points.size());
 
   // individual point timestamps should be relative to this time
+  // step: 2 获取点云参考时间戳
   double sweep_ref_time = this->scan_header_stamp.toSec();
 
   // sort points by timestamp and build list of timestamps
+  // step: 3 根据传感器定义 比较函数、不等于函数、提取时间函数
   std::function<bool(const PointType &, const PointType &)> point_time_cmp;
   std::function<bool(boost::range::index_value<PointType &, long>,
                      boost::range::index_value<PointType &, long>)>
@@ -824,17 +828,22 @@ void dlio::OdomNode::deskewPointcloud() {
   }
 
   // copy points into deskewed_scan_ in order of timestamp
+  // step: 4 根据时间戳对点云进行排序
   std::partial_sort_copy(this->original_scan->points.begin(),
                          this->original_scan->points.end(),
                          deskewed_scan_->points.begin(),
                          deskewed_scan_->points.end(), point_time_cmp);
 
   // filter unique timestamps
+  // step: 5 提取出时间戳不同的点
+  // indexed() 给点云加上索引 pair(idx, pt)
+  // adjacent_filtered(point_time_neq) 过滤出时间戳不同的点
   auto points_unique_timestamps =
       deskewed_scan_->points | boost::adaptors::indexed() |
       boost::adaptors::adjacent_filtered(point_time_neq);
 
   // extract timestamps from points and put them in their own list
+  // step: 6 从点中提取时间戳同时记录每个时间戳对应的第一个点的索引
   std::vector<double> timestamps;
   std::vector<int> unique_time_indices;
 
@@ -855,12 +864,14 @@ void dlio::OdomNode::deskewPointcloud() {
   }
   unique_time_indices.push_back(deskewed_scan_->points.size()); // add end index
 
+  // step: 7 中位数时间戳对应的点作为参考时间戳
   int median_pt_index = timestamps.size() / 2;
   this->scan_stamp =
       timestamps[median_pt_index]; // set this->scan_stamp to the timestamp of
                                    // the median point
 
   // don't process scans until IMU data is present
+  // step: 8 首次有效点云前不进行处理
   if (!this->first_valid_scan) {
     // note: 确保有IMU数据，并且IMU数据的时间戳早于当前点云扫描的时间戳
     if (this->imu_buffer.empty() ||
@@ -889,6 +900,14 @@ void dlio::OdomNode::deskewPointcloud() {
   }
 
   // IMU prior & deskewing for second scan onwards
+  // step: 9 利用IMU数据进行预积分，计算每个时间戳对应的位姿
+  // (第二个有效scan开始)
+  std::cout << std::fixed << std::setprecision(6) << "Integrating IMU..."
+            << " this->scan_stamp: " << this->scan_stamp << ", "
+            << " this->prev_scan_stamp: " << this->prev_scan_stamp << std::endl
+            << " points from " << timestamps.front() << " -> "
+            << timestamps.back() << std::endl;
+
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
       frames;
   frames = this->integrateImu(this->prev_scan_stamp, this->lidarPose.q,
@@ -899,10 +918,11 @@ void dlio::OdomNode::deskewPointcloud() {
 
   // if there are no frames between the start and end of the sweep
   // that probably means that there's a sync issue
+  // step: 10 如果扫描开始和结束之间没有帧，则可能意味着存在同步问题
   if (frames.size() != timestamps.size()) {
     ROS_FATAL("Bad time sync between LiDAR and IMU!");
 
-    this->T_prior = this->T;
+    this->T_prior = this->T; // 直接将T_prior设置为T
     pcl::transformPointCloud(*deskewed_scan_, *deskewed_scan_,
                              this->T_prior * this->extrinsics.baselink2lidar_T);
     this->deskewed_scan = deskewed_scan_;
@@ -912,11 +932,13 @@ void dlio::OdomNode::deskewPointcloud() {
 
   // update prior to be the estimated pose at the median time of the scan
   // (corresponds to this->scan_stamp)
+  // step: 11 更新T_prior为扫描中位时间对应的位姿
   this->T_prior = frames[median_pt_index];
 
-#pragma omp parallel for num_threads(this->num_threads_)
+#pragma omp parallel for num_threads(this->num_threads_) // 并行计算
   for (int i = 0; i < timestamps.size(); i++) {
 
+    // 计算每个时间戳对应的变换矩阵
     Eigen::Matrix4f T = frames[i] * this->extrinsics.baselink2lidar_T;
 
     // transform point to world frame, use same T for points with same timestamp
@@ -949,7 +971,7 @@ void dlio::OdomNode::setInputSource() {
   this->gicp.calculateSourceCovariances();
 }
 
-// 等待IMU数据和校准完成后，初始化DLIO
+// api: 等待IMU数据和校准完成后，初始化DLIO
 void dlio::OdomNode::initializeDLIO() {
   // Wait for IMU
   // 如果没有接收到IMU数据或者IMU没有校准，直接返回
@@ -961,7 +983,7 @@ void dlio::OdomNode::initializeDLIO() {
   std::cout << std::endl << " DLIO initialized!" << std::endl;
 }
 
-// 点云回调函数
+// api: 点云回调函数
 void dlio::OdomNode::callbackPointCloud(
     const sensor_msgs::PointCloud2ConstPtr &pc) {
 
@@ -1088,7 +1110,7 @@ void dlio::OdomNode::callbackPointCloud(
   this->geo.first_opt_done = true; // 第一次优化完成
 }
 
-// IMU回调函数
+// api: IMU回调函数
 void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
   this->first_imu_received = true;
@@ -1306,11 +1328,13 @@ void dlio::OdomNode::getNextPose() {
   this->updateState();
 }
 
+// api: 获取指定时间范围内的IMU测量值的迭代器
 bool dlio::OdomNode::imuMeasFromTimeRange(
     double start_time, double end_time,
     boost::circular_buffer<ImuMeas>::reverse_iterator &begin_imu_it,
     boost::circular_buffer<ImuMeas>::reverse_iterator &end_imu_it) {
 
+  // step: 1 等待直到IMU缓冲区中有足够的数据
   if (this->imu_buffer.empty() || this->imu_buffer.front().stamp < end_time) {
     // Wait for the latest IMU data
     std::unique_lock<decltype(this->mtx_imu)> lock(this->mtx_imu);
@@ -1319,8 +1343,11 @@ bool dlio::OdomNode::imuMeasFromTimeRange(
     });
   }
 
+  // step: 2 查找时间范围内的IMU测量值的迭代器
   auto imu_it = this->imu_buffer.begin();
 
+  // step: 2.1
+  // 第一个时间戳小于end_time的IMU测量值停止，last_imu_it指向该位置上一个
   auto last_imu_it = imu_it;
   imu_it++;
   while (imu_it != this->imu_buffer.end() && imu_it->stamp >= end_time) {
@@ -1328,10 +1355,12 @@ bool dlio::OdomNode::imuMeasFromTimeRange(
     imu_it++;
   }
 
+  // step: 2.2 第一个时间戳小于start_time的IMU测量值停止，imu_it指向该位置
   while (imu_it != this->imu_buffer.end() && imu_it->stamp >= start_time) {
     imu_it++;
   }
 
+  // step: 3 检查是否有足够的IMU测量值
   if (imu_it == this->imu_buffer.end()) {
     // not enough IMU measurements, return false
     return false;
@@ -1339,12 +1368,14 @@ bool dlio::OdomNode::imuMeasFromTimeRange(
   imu_it++;
 
   // Set reverse iterators (to iterate forward in time)
+  // step: 4 设置反向迭代器（以时间正序迭代）
   end_imu_it = boost::circular_buffer<ImuMeas>::reverse_iterator(last_imu_it);
   begin_imu_it = boost::circular_buffer<ImuMeas>::reverse_iterator(imu_it);
 
   return true;
 }
 
+// api: 利用IMU数据进行积分，计算每个时间戳对应的位姿
 std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
 dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
                              Eigen::Vector3f p_init, Eigen::Vector3f v_init,
@@ -1353,11 +1384,13 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
   const std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
       empty;
 
+  // step: 1 时间戳为空或者时间戳大于第一个时间戳，返回空向量
   if (sorted_timestamps.empty() || start_time > sorted_timestamps.front()) {
     // invalid input, return empty vector
     return empty;
   }
 
+  // step: 2 获取start_time到最后一个时间戳之间的IMU测量值的迭代器
   boost::circular_buffer<ImuMeas>::reverse_iterator begin_imu_it;
   boost::circular_buffer<ImuMeas>::reverse_iterator end_imu_it;
   if (this->imuMeasFromTimeRange(start_time, sorted_timestamps.back(),
@@ -1365,7 +1398,8 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
     // not enough IMU measurements, return empty vector
     return empty;
   }
-
+  std::cout << " IMU measurements for integration from " << begin_imu_it->stamp
+            << " -> " << (end_imu_it - 1)->stamp << std::endl;
   // Backwards integration to find pose at first IMU sample
   const ImuMeas &f1 = *begin_imu_it;
   const ImuMeas &f2 = *(begin_imu_it + 1);
@@ -1377,10 +1411,14 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
   double idt = start_time - f1.stamp;
 
   // Angular acceleration between first two IMU samples
+  // step: 3 角加速度 alpha
   Eigen::Vector3f alpha_dt = f2.ang_vel - f1.ang_vel;
   Eigen::Vector3f alpha = alpha_dt / dt;
 
   // Average angular velocity (reversed) between first IMU sample and start_time
+  // note: 积分方法见论文公式(4)，省略最后一项
+  // step: 4 角速度 omega_i，用于计算f1测量的姿态
+  // 负号表示从start_time反积分回f1.stamp
   Eigen::Vector3f omega_i = -(f1.ang_vel + 0.5 * alpha * idt);
 
   // Set q_init to orientation at first IMU sample
@@ -1404,6 +1442,7 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
   q_init.normalize();
 
   // Average angular velocity between first two IMU samples
+  // step: 5 角速度 omega，用于计算f2测量的姿态
   Eigen::Vector3f omega = f1.ang_vel + 0.5 * alpha_dt;
 
   // Orientation at second IMU sample
@@ -1426,6 +1465,7 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
                        dt);
   q2.normalize();
 
+  // step: 6 计算f1和f2测量的加速度以及jerk
   // Acceleration at first IMU sample
   Eigen::Vector3f a1 = q_init._transformVector(f1.lin_accel);
   a1[2] -= this->gravity_;
@@ -1438,6 +1478,7 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
   Eigen::Vector3f j = (a2 - a1) / dt;
 
   // Set v_init to velocity at first IMU sample (go backwards from start_time)
+  // step: 7 计算f1测量的速度和位置，反积分回start_time
   v_init -= a1 * idt + 0.5 * j * idt * idt;
 
   // Set p_init to position at first IMU sample (go backwards from start_time)
@@ -1448,6 +1489,7 @@ dlio::OdomNode::integrateImu(double start_time, Eigen::Quaternionf q_init,
                                     begin_imu_it, end_imu_it);
 }
 
+// api: IMU积分的内部实现
 std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>>
 dlio::OdomNode::integrateImuInternal(
     Eigen::Quaternionf q_init, Eigen::Vector3f p_init, Eigen::Vector3f v_init,
@@ -1459,6 +1501,7 @@ dlio::OdomNode::integrateImuInternal(
       imu_se3;
 
   // Initialization
+  // step: 1 初始化位姿、位置、速度和加速度
   Eigen::Quaternionf q = q_init;
   Eigen::Vector3f p = p_init;
   Eigen::Vector3f v = v_init;
@@ -1471,19 +1514,21 @@ dlio::OdomNode::integrateImuInternal(
 
   auto stamp_it = sorted_timestamps.begin();
 
+  // step: 2 遍历IMU测量值并进行积分
   for (; imu_it != end_imu_it; imu_it++) {
 
+    // step: 2.1 获取基准IMU测量的状态
     const ImuMeas &f0 = *prev_imu_it;
     const ImuMeas &f = *imu_it;
 
     // Time between IMU samples
     double dt = f.dt;
 
-    // Angular acceleration
+    // Angular acceleration 角加速度
     Eigen::Vector3f alpha_dt = f.ang_vel - f0.ang_vel;
     Eigen::Vector3f alpha = alpha_dt / dt;
 
-    // Average angular velocity
+    // Average angular velocity 角速度
     Eigen::Vector3f omega = f0.ang_vel + 0.5 * alpha_dt;
 
     // Orientation
@@ -1498,7 +1543,7 @@ dlio::OdomNode::integrateImuInternal(
                     dt);
     q.normalize();
 
-    // Acceleration
+    // Acceleration 加速度
     Eigen::Vector3f a0 = a;
     a = q._transformVector(f.lin_accel);
     a[2] -= this->gravity_;
@@ -1508,6 +1553,7 @@ dlio::OdomNode::integrateImuInternal(
     Eigen::Vector3f j = j_dt / dt;
 
     // Interpolate for given timestamps
+    // step: 2.2 对给定时间戳进行插值
     while (stamp_it != sorted_timestamps.end() && *stamp_it <= f.stamp) {
       // Time between previous IMU sample and given timestamp
       double idt = *stamp_it - f0.stamp;
@@ -1515,6 +1561,7 @@ dlio::OdomNode::integrateImuInternal(
       // Average angular velocity
       Eigen::Vector3f omega_i = f0.ang_vel + 0.5 * alpha * idt;
 
+      // note: 积分方法见论文公式(5)
       // Orientation
       Eigen::Quaternionf q_i(
           q.w() - 0.5 *
@@ -1550,6 +1597,8 @@ dlio::OdomNode::integrateImuInternal(
     }
 
     // Position
+    // step: 3 位置和速度的更新
+    // note: 见论文公式(4)
     p += v * dt + 0.5 * a0 * dt * dt + (1 / 6.) * j_dt * dt * dt;
 
     // Velocity
@@ -1683,7 +1732,7 @@ void dlio::OdomNode::updateState() {
   this->geo.prev_vel = this->state.v.lin.w;
 }
 
-// 转换到body系
+// api: 转换到body系后的IMU数据
 sensor_msgs::Imu::Ptr
 dlio::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
 
@@ -1738,14 +1787,17 @@ dlio::OdomNode::transformImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
   return imu;
 }
 
+// api: 计算里程计节点的度量指标
 void dlio::OdomNode::computeMetrics() {
-  this->computeSpaciousness();
-  this->computeDensity();
+  this->computeSpaciousness(); // 计算稀疏度
+  this->computeDensity();      // 计算密度
 }
 
+// api: 计算稀疏度，定义为点云中点到传感器的距离的中值
 void dlio::OdomNode::computeSpaciousness() {
 
   // compute range of points
+  // step: 1 计算每个点到传感器的距离
   std::vector<float> ds;
 
   for (int i = 0; i < this->original_scan->points.size(); i++) {
@@ -1755,6 +1807,7 @@ void dlio::OdomNode::computeSpaciousness() {
   }
 
   // median
+  // step: 2 计算距离的中值
   std::nth_element(ds.begin(), ds.begin() + ds.size() / 2, ds.end());
   float median_curr = ds[ds.size() / 2];
   static float median_prev = median_curr;
@@ -1765,11 +1818,13 @@ void dlio::OdomNode::computeSpaciousness() {
   this->metrics.spaciousness.push_back(median_lpf);
 }
 
+// api: 计算密度，定义为GICP配准中源点云的平均密度
 void dlio::OdomNode::computeDensity() {
 
   float density;
 
   if (!this->geo.first_opt_done) {
+    // 如果第一次优化未完成（没有完成GICP），则认为没有密度
     density = 0.;
   } else {
     density = this->gicp.source_density_;
@@ -2019,12 +2074,15 @@ void dlio::OdomNode::pushSubmapIndices(std::vector<float> dists, int k,
   }
 }
 
+// api: 构建子图
 void dlio::OdomNode::buildSubmap(State vehicle_state) {
 
   // clear vector of keyframe indices to use for submap
+  // step: 1 清空当前子图关键帧索引列表
   this->submap_kf_idx_curr.clear();
 
   // calculate distance between current pose and poses in keyframe set
+  // step: 2 计算当前位姿与所有关键帧位姿的距离
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
   std::vector<float> ds;
   std::vector<int> keyframe_nn;
@@ -2033,57 +2091,69 @@ void dlio::OdomNode::buildSubmap(State vehicle_state) {
         sqrt(pow(vehicle_state.p[0] - this->keyframes[i].first.first[0], 2) +
              pow(vehicle_state.p[1] - this->keyframes[i].first.first[1], 2) +
              pow(vehicle_state.p[2] - this->keyframes[i].first.first[2], 2));
-    ds.push_back(d);
-    keyframe_nn.push_back(i);
+    ds.push_back(d);          // 存储距离
+    keyframe_nn.push_back(i); // 存储关键帧索引
   }
   lock.unlock();
 
   // get indices for top K nearest neighbor keyframe poses
+  // step: 3 获取最近邻K个关键帧索引
   this->pushSubmapIndices(ds, this->submap_knn_, keyframe_nn);
 
   // get convex hull indices
+  // step: 4 计算凸包关键帧索引
   this->computeConvexHull();
 
   // get distances for each keyframe on convex hull
+  // step: 5 获取凸包上每个关键帧之间的距离
   std::vector<float> convex_ds;
   for (const auto &c : this->keyframe_convex) {
-    convex_ds.push_back(ds[c]);
+    convex_ds.push_back(ds[c]); // 存储距离
   }
 
   // get indices for top kNN for convex hull
+  // step: 6 获取凸包上最近邻K个关键帧索引
   this->pushSubmapIndices(convex_ds, this->submap_kcv_, this->keyframe_convex);
 
   // get concave hull indices
+  // step: 7 计算凹包关键帧索引
   this->computeConcaveHull();
 
   // get distances for each keyframe on concave hull
+  // step: 8 获取凹包上每个关键帧之间的距离
   std::vector<float> concave_ds;
   for (const auto &c : this->keyframe_concave) {
     concave_ds.push_back(ds[c]);
   }
 
   // get indices for top kNN for concave hull
+  // step: 9 获取凹包上最近邻K个关键帧索引
   this->pushSubmapIndices(concave_ds, this->submap_kcc_,
                           this->keyframe_concave);
 
   // sort current and previous submap kf list of indices
+  // step: 10 对当前和之前的子图关键帧索引列表进行排序
   std::sort(this->submap_kf_idx_curr.begin(), this->submap_kf_idx_curr.end());
   std::sort(this->submap_kf_idx_prev.begin(), this->submap_kf_idx_prev.end());
 
   // remove duplicate indices
+  // step: 11 去除重复的关键帧索引
   auto last = std::unique(this->submap_kf_idx_curr.begin(),
                           this->submap_kf_idx_curr.end());
   this->submap_kf_idx_curr.erase(last, this->submap_kf_idx_curr.end());
 
   // check if submap has changed from previous iteration
+  // step: 12 检查子图是否发生变化
   if (this->submap_kf_idx_curr != this->submap_kf_idx_prev) {
 
     this->submap_hasChanged = true;
 
     // Pause to prevent stealing resources from the main loop if it is running.
+    // step: 12.1 如果主循环正在运行，则暂停以防止抢占资源
     this->pauseSubmapBuildIfNeeded();
 
     // reinitialize submap cloud and normals
+    // step: 12.2 重新初始化子图点云和法线
     pcl::PointCloud<PointType>::Ptr submap_cloud_(
         boost::make_shared<pcl::PointCloud<PointType>>());
     std::shared_ptr<nano_gicp::CovarianceList> submap_normals_(
@@ -2106,34 +2176,43 @@ void dlio::OdomNode::buildSubmap(State vehicle_state) {
     this->submap_normals = submap_normals_;
 
     // Pause to prevent stealing resources from the main loop if it is running.
+    // step: 12.3 如果主循环正在运行，则暂停以防止抢占资源
     this->pauseSubmapBuildIfNeeded();
 
+    // step: 12.4 将子地图的点云赋值给gicp_temp的目标点云
     this->gicp_temp.setInputTarget(this->submap_cloud);
     this->submap_kdtree = this->gicp_temp.target_kdtree_;
 
+    // update previous submap keyframe indices
+    // step: 12.5 更新之前的子图关键帧索引列表
     this->submap_kf_idx_prev = this->submap_kf_idx_curr;
   }
 }
 
+// api: 构建关键帧和子图
 void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
 
   // transform the new keyframe(s) and associated covariance list(s)
   std::unique_lock<decltype(this->keyframes_mutex)> lock(this->keyframes_mutex);
 
+  // step: 1 转换新的关键帧和相关的协方差列表
+  // 遍历未处理的关键帧,并完成局部点云向全局点云的转换
   for (int i = this->num_processed_keyframes; i < this->keyframes.size(); i++) {
     pcl::PointCloud<PointType>::ConstPtr raw_keyframe =
-        this->keyframes[i].second;
+        this->keyframes[i].second; // 关键帧点云
     std::shared_ptr<const nano_gicp::CovarianceList> raw_covariances =
-        this->keyframe_normals[i];
-    Eigen::Matrix4f T = this->keyframe_transformations[i];
+        this->keyframe_normals[i];                         // 关键帧协方差
+    Eigen::Matrix4f T = this->keyframe_transformations[i]; // 关键帧变换矩阵
     lock.unlock();
 
     Eigen::Matrix4d Td = T.cast<double>();
 
+    // 将关键帧点云转换到世界坐标系下
     pcl::PointCloud<PointType>::Ptr transformed_keyframe(
         boost::make_shared<pcl::PointCloud<PointType>>());
     pcl::transformPointCloud(*raw_keyframe, *transformed_keyframe, T);
 
+    // 将关键帧的协方差转换到世界坐标系下
     std::shared_ptr<nano_gicp::CovarianceList> transformed_covariances(
         std::make_shared<nano_gicp::CovarianceList>(raw_covariances->size()));
     std::transform(
@@ -2144,20 +2223,22 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
     ++this->num_processed_keyframes;
 
     lock.lock();
-    this->keyframes[i].second = transformed_keyframe;
-    this->keyframe_normals[i] = transformed_covariances;
+    this->keyframes[i].second = transformed_keyframe; // 更新关键帧点云
+    this->keyframe_normals[i] = transformed_covariances; // 更新关键帧协方差
 
     this->publish_keyframe_thread =
         std::thread(&dlio::OdomNode::publishKeyframe, this, this->keyframes[i],
-                    this->keyframe_timestamps[i]);
+                    this->keyframe_timestamps[i]); // 发布关键帧
     this->publish_keyframe_thread.detach();
   }
 
   lock.unlock();
 
   // Pause to prevent stealing resources from the main loop if it is running.
+  // step: 2 如果主循环正在运行，则暂停以防止抢占资源
   this->pauseSubmapBuildIfNeeded();
 
+  // step: 3 构建子图
   this->buildSubmap(vehicle_state);
 }
 

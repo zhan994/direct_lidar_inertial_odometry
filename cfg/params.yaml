@@ -36,7 +36,7 @@ dlio:
       calibration:
         gyro: true
         accel: true
-        time: 0.5
+        time: 1.0
       bufferSize: 5000
 
     preprocessing:
