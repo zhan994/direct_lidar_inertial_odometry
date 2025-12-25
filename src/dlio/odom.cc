@@ -198,6 +198,7 @@ dlio::OdomNode::OdomNode(ros::NodeHandle node_handle) : nh(node_handle) {
 
 dlio::OdomNode::~OdomNode() {}
 
+// api: 获取参数
 void dlio::OdomNode::getParams() {
 
   // Version
@@ -398,6 +399,7 @@ void dlio::OdomNode::getParams() {
   }
 }
 
+// api: 打印启动信息
 void dlio::OdomNode::start() {
   if (!this->verbose) {
     return;
@@ -415,6 +417,7 @@ void dlio::OdomNode::start() {
       << std::endl;
 }
 
+// api: 发布消息数据
 void dlio::OdomNode::publishPose(const ros::TimerEvent &e) {
 
   // nav_msgs::Odometry
@@ -966,6 +969,7 @@ void dlio::OdomNode::initializeInputTarget() {
   this->keyframe_transformations.push_back(this->T_corr);
 }
 
+// api: 设置当前点云为GICP的源点云
 void dlio::OdomNode::setInputSource() {
   this->gicp.setInputSource(this->current_scan);
   this->gicp.calculateSourceCovariances();
@@ -1288,28 +1292,35 @@ void dlio::OdomNode::callbackImu(const sensor_msgs::Imu::ConstPtr &imu_raw) {
   }
 }
 
+// api: 获取下一个位姿 IMU + S2M + GEO
 void dlio::OdomNode::getNextPose() {
 
   // Check if the new submap is ready to be used
+  // step: 1 检查新子地图是否准备好可供使用
   this->new_submap_is_ready =
       (this->submap_future.wait_for(std::chrono::seconds(0)) ==
        std::future_status::ready);
 
+  // step: 2 如果有新的子地图，更新GICP的目标点云
   if (this->new_submap_is_ready && this->submap_hasChanged) {
 
     // Set the current global submap as the target cloud
+    // step: 2.1 设置当前全局子地图为目标点云
     this->gicp.registerInputTarget(this->submap_cloud);
 
     // Set submap kdtree
+    // step: 2.2 设置子地图的kdtree
     this->gicp.target_kdtree_ = this->submap_kdtree;
 
     // Set target cloud's normals as submap normals
+    // step: 2.3 设置目标点云的法线为子地图法线
     this->gicp.setTargetCovariances(this->submap_normals);
 
     this->submap_hasChanged = false;
   }
 
   // Align with current submap with global IMU transformation as initial guess
+  // step: 3 使用全局IMU变换作为初始猜测与当前子地图对齐
   pcl::PointCloud<PointType>::Ptr aligned(
       boost::make_shared<pcl::PointCloud<PointType>>());
   this->gicp.align(*aligned);
@@ -1322,9 +1333,11 @@ void dlio::OdomNode::getNextPose() {
   // Update next global pose
   // Both source and target clouds are in the global frame now, so tranformation
   // is global
+  // step: 4 更新下一个全局位姿
   this->propagateGICP();
 
   // Geometric observer update
+  // step: 5 几何观测器更新
   this->updateState();
 }
 
@@ -1610,6 +1623,7 @@ dlio::OdomNode::integrateImuInternal(
   return imu_se3;
 }
 
+// api: 从GICP结果中传播位姿
 void dlio::OdomNode::propagateGICP() {
 
   this->lidarPose.p << this->T(0, 3), this->T(1, 3), this->T(2, 3);
@@ -1630,9 +1644,11 @@ void dlio::OdomNode::propagateGICP() {
   this->lidarPose.q = q;
 }
 
+// api: 状态传播 IMU积分
 void dlio::OdomNode::propagateState() {
 
   // Lock thread to prevent state from being accessed by UpdateState
+  // step: 1 锁定线程以防止状态被UpdateState访问
   std::lock_guard<std::mutex> lock(this->geo.mtx);
 
   double dt = this->imu_meas.dt;
@@ -1641,9 +1657,11 @@ void dlio::OdomNode::propagateState() {
   Eigen::Vector3f world_accel;
 
   // Transform accel from body to world frame
+  // step: 2 将加速度从body系转换到world系
   world_accel = qhat._transformVector(this->imu_meas.lin_accel);
 
   // Accel propogation
+  // step: 3 位置和速度的传播
   this->state.p[0] +=
       this->state.v.lin.w[0] * dt + 0.5 * dt * dt * world_accel[0];
   this->state.p[1] +=
@@ -1658,6 +1676,7 @@ void dlio::OdomNode::propagateState() {
       this->state.q.toRotationMatrix().inverse() * this->state.v.lin.w;
 
   // Gyro propogation
+  // step: 4 四元数的传播
   omega.w() = 0;
   omega.vec() = this->imu_meas.ang_vel;
   Eigen::Quaternionf tmp = qhat * omega;
@@ -1671,19 +1690,22 @@ void dlio::OdomNode::propagateState() {
   this->state.v.ang.w = this->state.q.toRotationMatrix() * this->state.v.ang.b;
 }
 
+// api: 几何观测器更新 GEO
 void dlio::OdomNode::updateState() {
-
+  // note: 见论文公式(7)
   // Lock thread to prevent state from being accessed by PropagateState
+  // step: 1 锁定线程以防止状态被PropagateState访问
   std::lock_guard<std::mutex> lock(this->geo.mtx);
 
-  Eigen::Vector3f pin = this->lidarPose.p;
-  Eigen::Quaternionf qin = this->lidarPose.q;
-  double dt = this->scan_stamp - this->prev_scan_stamp;
+  Eigen::Vector3f pin = this->lidarPose.p;              // 位置
+  Eigen::Quaternionf qin = this->lidarPose.q;           // 位姿方向
+  double dt = this->scan_stamp - this->prev_scan_stamp; // 时间间隔
 
   Eigen::Quaternionf qe, qhat, qcorr;
   qhat = this->state.q;
 
   // Constuct error quaternion
+  // step: 2 构造误差四元数
   qe = qhat.conjugate() * qin;
 
   double sgn = 1.;
@@ -1692,10 +1714,12 @@ void dlio::OdomNode::updateState() {
   }
 
   // Construct quaternion correction
+  // step: 3 构造四元数修正
   qcorr.w() = 1 - abs(qe.w());
   qcorr.vec() = sgn * qe.vec();
   qcorr = qhat * qcorr;
 
+  // step: 4 计算位置误差
   Eigen::Vector3f err = pin - this->state.p;
   Eigen::Vector3f err_body;
 
@@ -1705,11 +1729,13 @@ void dlio::OdomNode::updateState() {
   double gbias_max = this->geo_gbias_max_;
 
   // Update accel bias
+  // step: 5 更新加速度计偏置
   this->state.b.accel -= dt * this->geo_Kab_ * err_body;
   this->state.b.accel =
       this->state.b.accel.array().min(abias_max).max(-abias_max);
 
   // Update gyro bias
+  // step: 6 更新陀螺仪偏置
   this->state.b.gyro[0] -= dt * this->geo_Kgb_ * qe.w() * qe.x();
   this->state.b.gyro[1] -= dt * this->geo_Kgb_ * qe.w() * qe.y();
   this->state.b.gyro[2] -= dt * this->geo_Kgb_ * qe.w() * qe.z();
@@ -1717,6 +1743,7 @@ void dlio::OdomNode::updateState() {
       this->state.b.gyro.array().min(gbias_max).max(-gbias_max);
 
   // Update state
+  // step: 7 更新状态
   this->state.p += dt * this->geo_Kp_ * err;
   this->state.v.lin.w += dt * this->geo_Kv_ * err;
 
@@ -1837,14 +1864,17 @@ void dlio::OdomNode::computeDensity() {
   this->metrics.density.push_back(density_lpf);
 }
 
+// api: 计算凸包，存储关键帧索引
 void dlio::OdomNode::computeConvexHull() {
 
   // at least 4 keyframes for convex hull
+  // step: 1 至少需要4个关键帧来计算凸包
   if (this->num_processed_keyframes < 4) {
     return;
   }
 
   // create a pointcloud with points at keyframes
+  // step: 2 创建一个点云，其中包含关键帧的位置点
   pcl::PointCloud<PointType>::Ptr cloud = pcl::PointCloud<PointType>::Ptr(
       boost::make_shared<pcl::PointCloud<PointType>>());
 
@@ -1859,14 +1889,17 @@ void dlio::OdomNode::computeConvexHull() {
   lock.unlock();
 
   // calculate the convex hull of the point cloud
+  // step: 3 计算点云的凸包
   this->convex_hull.setInputCloud(cloud);
 
   // get the indices of the keyframes on the convex hull
+  // step: 4 通过传入的点集来重新构建当前对象中的凸包
   pcl::PointCloud<PointType>::Ptr convex_points =
       pcl::PointCloud<PointType>::Ptr(
           boost::make_shared<pcl::PointCloud<PointType>>());
   this->convex_hull.reconstruct(*convex_points);
 
+  // step: 5 获取凸包上关键帧的索引，并存储到keyframe_convex中
   pcl::PointIndices::Ptr convex_hull_point_idx =
       pcl::PointIndices::Ptr(boost::make_shared<pcl::PointIndices>());
   this->convex_hull.getHullPointIndices(*convex_hull_point_idx);
@@ -1877,14 +1910,17 @@ void dlio::OdomNode::computeConvexHull() {
   }
 }
 
+// api: 计算凹包，存储关键帧索引
 void dlio::OdomNode::computeConcaveHull() {
 
   // at least 5 keyframes for concave hull
+  // step: 1 至少需要5个关键帧来计算凹包
   if (this->num_processed_keyframes < 5) {
     return;
   }
 
   // create a pointcloud with points at keyframes
+  // step: 2 创建一个点云，其中包含关键帧的位置点
   pcl::PointCloud<PointType>::Ptr cloud = pcl::PointCloud<PointType>::Ptr(
       boost::make_shared<pcl::PointCloud<PointType>>());
 
@@ -1899,14 +1935,17 @@ void dlio::OdomNode::computeConcaveHull() {
   lock.unlock();
 
   // calculate the concave hull of the point cloud
+  // step: 3 计算点云的凹包
   this->concave_hull.setInputCloud(cloud);
 
   // get the indices of the keyframes on the concave hull
+  // step: 4 通过传入的点集来重新构建当前对象中的凹包
   pcl::PointCloud<PointType>::Ptr concave_points =
       pcl::PointCloud<PointType>::Ptr(
           boost::make_shared<pcl::PointCloud<PointType>>());
   this->concave_hull.reconstruct(*concave_points);
 
+  // step: 5 获取凹包上关键帧的索引，并存储到keyframe_concave中
   pcl::PointIndices::Ptr concave_hull_point_idx =
       pcl::PointIndices::Ptr(boost::make_shared<pcl::PointIndices>());
   this->concave_hull.getHullPointIndices(*concave_hull_point_idx);
@@ -1917,46 +1956,53 @@ void dlio::OdomNode::computeConcaveHull() {
   }
 }
 
+// api: 根据位姿差异更新关键帧
 void dlio::OdomNode::updateKeyframes() {
 
   // calculate difference in pose and rotation to all poses in trajectory
+  // step: 1 计算当前位姿与所有关键帧位姿之间的差异
   float closest_d = std::numeric_limits<float>::infinity();
   int closest_idx = 0;
   int keyframes_idx = 0;
 
   int num_nearby = 0;
 
+  // step: 2 遍历所有关键帧
   for (const auto &k : this->keyframes) {
-
     // calculate distance between current pose and pose in keyframes
+    // step: 2.1 计算当前位姿与关键帧位姿之间的距离
     float delta_d = sqrt(pow(this->state.p[0] - k.first.first[0], 2) +
                          pow(this->state.p[1] - k.first.first[1], 2) +
                          pow(this->state.p[2] - k.first.first[2], 2));
 
     // count the number nearby current pose
+    // step: 2.2 计算距离当前位姿较近的关键帧数量
     if (delta_d <= this->keyframe_thresh_dist_ * 1.5) {
       ++num_nearby;
     }
 
     // store into variable
     if (delta_d < closest_d) {
-      closest_d = delta_d;
-      closest_idx = keyframes_idx;
+      closest_d = delta_d;         // 更新最近距离
+      closest_idx = keyframes_idx; // 更新最近关键帧索引
     }
 
     keyframes_idx++;
   }
 
   // get closest pose and corresponding rotation
+  // step: 3 获取最近关键帧的位姿和旋转
   Eigen::Vector3f closest_pose = this->keyframes[closest_idx].first.first;
   Eigen::Quaternionf closest_pose_r = this->keyframes[closest_idx].first.second;
 
   // calculate distance between current pose and closest pose from above
+  // step: 4 计算当前位姿与最近关键帧位姿之间的距离
   float dd = sqrt(pow(this->state.p[0] - closest_pose[0], 2) +
                   pow(this->state.p[1] - closest_pose[1], 2) +
                   pow(this->state.p[2] - closest_pose[2], 2));
 
   // calculate difference in orientation using SLERP
+  // step: 5 计算当前位姿与最近关键帧位姿之间的旋转差异，使用四元数的SLERP方法
   Eigen::Quaternionf dq;
 
   if (this->state.q.dot(closest_pose_r) < 0.) {
@@ -1976,6 +2022,7 @@ void dlio::OdomNode::updateKeyframes() {
   double theta_deg = theta_rad * (180.0 / M_PI);
 
   // update keyframes
+  // step: 6 根据距离和旋转差异更新关键帧
   bool newKeyframe = false;
 
   if (abs(dd) > this->keyframe_thresh_dist_ ||
@@ -2007,9 +2054,11 @@ void dlio::OdomNode::updateKeyframes() {
   }
 }
 
+// api: 根据度量指标设置自适应参数
 void dlio::OdomNode::setAdaptiveParams() {
 
   // Spaciousness
+  // step: 1 获取并修改稀疏度指标
   float sp = this->metrics.spaciousness.back();
 
   if (sp < 0.5) {
@@ -2022,6 +2071,7 @@ void dlio::OdomNode::setAdaptiveParams() {
   this->keyframe_thresh_dist_ = sp;
 
   // Density
+  // step: 2 获取并修改密度指标
   float den = this->metrics.density.back();
 
   if (den < 0.5 * this->gicp_max_corr_dist_) {
@@ -2041,18 +2091,22 @@ void dlio::OdomNode::setAdaptiveParams() {
   this->gicp.setMaxCorrespondenceDistance(den);
 
   // Concave hull alpha
+  // step: 3 设置凹包的alpha参数
   this->concave_hull.setAlpha(this->keyframe_thresh_dist_);
 }
 
+// api: 获取子图关键帧索引
 void dlio::OdomNode::pushSubmapIndices(std::vector<float> dists, int k,
                                        std::vector<int> frames) {
 
   // make sure dists is not empty
+  // step: 1 确保距离向量不为空
   if (!dists.size()) {
     return;
   }
 
   // maintain max heap of at most k elements
+  // step: 2 使用最大堆维护最多k个元素
   std::priority_queue<float> pq;
 
   for (auto d : dists) {
@@ -2065,6 +2119,7 @@ void dlio::OdomNode::pushSubmapIndices(std::vector<float> dists, int k,
   }
 
   // get the kth smallest element, which should be at the top of the heap
+  // step: 3 获取第k小的元素，并获取所有小于等于该元素的索引
   float kth_element = pq.top();
 
   // get all elements smaller or equal to the kth smallest element
@@ -2242,9 +2297,15 @@ void dlio::OdomNode::buildKeyframesAndSubmap(State vehicle_state) {
   this->buildSubmap(vehicle_state);
 }
 
+// api: 如果主循环正在运行，则暂停子图构建
 void dlio::OdomNode::pauseSubmapBuildIfNeeded() {
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(
       this->main_loop_running_mutex);
+
+  // 下面的写法等价于：
+  // while (this->main_loop_running) {   // 条件不满足时
+  //   this->submap_build_cv.wait(lock); // 阻塞等待
+  // }
   this->submap_build_cv.wait(lock, [this] { return !this->main_loop_running; });
 }
 
