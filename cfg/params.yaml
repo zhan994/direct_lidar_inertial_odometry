@@ -11,7 +11,7 @@
 ###########################################################
 
 dlio:
-  verbose: false
+  verbose: true
   evo_traj_file: /home/zhan/DLIO.txt
   frames:
     odom: odom
@@ -36,14 +36,14 @@ dlio:
       calibration:
         gyro: true
         accel: true
-        time: 1.0
+        time: 0.2
       bufferSize: 5000
 
     preprocessing:
       cropBoxFilter:
         size: 1.0
       voxelFilter:
-        res: 0.25
+        res: 0.5
 
     keyframe:
       threshD: 1.0
